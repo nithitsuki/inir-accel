@@ -232,7 +232,7 @@ fn handle_python_shim(args: &[String]) -> ! {
 
 fn print_help() {
     println!(
-        "inir-accel 0.2.0 — Unified Single-Binary Rust Runtime & Theme/Vision Accelerator for iNiR
+        "inir-accel 0.1.0 — Unified Single-Binary Rust Runtime & Theme/Vision Accelerator for iNiR
 Usage:
   inir-accel washi [--request '<json>' | --default] [--out <file>]
   inir-accel material-colors [--path <img> | --color <hex>] [--mode dark|light] [--scheme <name>] ...

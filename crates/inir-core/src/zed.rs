@@ -938,7 +938,7 @@ fn parse_flags(argv0: &str, args: &[String], defaults: &Flags) -> Result<(Flags,
 pub fn run_cli(argv0: &str, args: &[String]) -> i32 {
     let home = home();
     let generated = join(&[&home, ".local/state/quickshell/user/generated"]);
-    let mut template = join(&[".", "dots/.config/matugen/templates/zed-colors.json"]);
+    let mut template = join(&[".", "defaults/matugen/templates/zed-colors.json"]);
     if fs::metadata(&template).is_err() {
         template = String::new();
     }

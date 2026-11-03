@@ -8,7 +8,8 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$(cd "$PLUGIN_ROOT" && cargo metadata --format-v
     python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null || true)}"
 TARGET_DIR="${TARGET_DIR:-$PLUGIN_ROOT/target}"
 RELEASE_DIR="${TARGET_DIR}/release"
-BUILT_BIN="${RELEASE_DIR}/inir-accel"
+# INIR_ACCEL_PREBUILT: a binary built elsewhere (a CI artifact) to install instead of the local cargo build.
+BUILT_BIN="${INIR_ACCEL_PREBUILT:-${RELEASE_DIR}/inir-accel}"
 
 SHIM_DIR="${PLUGIN_ROOT}/bin"
 INSTALLED_BIN="${SHIM_DIR}/inir-accel"
@@ -50,6 +51,10 @@ restore_go() {
 
 case "$cmd" in
     install)
+        if [[ -n "${INIR_ACCEL_PREBUILT:-}" && ! -x "$BUILT_BIN" ]]; then
+            echo "[inir-rust-plugin] INIR_ACCEL_PREBUILT is not an executable: $BUILT_BIN" >&2
+            exit 1
+        fi
         if [[ ! -x "$BUILT_BIN" && ! -x "$INSTALLED_BIN" ]]; then
             echo "[inir-rust-plugin] Building release binaries first..."
             cargo build --release --manifest-path "${PLUGIN_ROOT}/Cargo.toml"

@@ -1,11 +1,19 @@
 name: release
 
 # The binary setup fetches: built on the oldest glibc people run, so it starts on all of them. PRs build it too.
-# One build per arch on its own runner (the tests run natively there too), one job publishes them all.
+# One build per arch on its own runner (the tests run natively there too), one job publishes them all. Every branch push
+# builds too and keeps the artifacts that `bin/ci-take accel` (inir-eco) puts live: nothing compiles on the maintainer's
+# machine.
 on:
   push:
+    branches: ["**"]
     tags: ["v*"]
   pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: write
@@ -36,6 +44,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: inir-accel-${{ matrix.arch }}
+          retention-days: 30
           path: |
             out/*.tar.gz
             out/*.sha256

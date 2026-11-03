@@ -47,8 +47,10 @@ Measured on a live session, a 4K wallpaper and a folder of 350:
 
 ## Using it
 
-iNiR will ship it prebuilt; until that release you build it. You need Rust 1.85 or newer (edition 2024) and, for the QML
-plugin, Qt 6 with its development files (cxx-qt finds it through `QMAKE`, or `qmake6`/`qmake` on `PATH`).
+iNiR's setup and update install it prebuilt for x86_64 and aarch64 ([Releases](https://github.com/snowarch/inir-accel/releases),
+built by CI on every `v*` tag and pinned by sha256 in iNiR's base). To build it yourself you need Rust 1.85 or newer
+(edition 2024) and, for the QML plugin, Qt 6 with its development files (cxx-qt finds it through `QMAKE`, or
+`qmake6`/`qmake` on `PATH`).
 
 ```sh
 cargo build --release

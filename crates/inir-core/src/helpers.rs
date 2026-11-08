@@ -240,6 +240,8 @@ struct SinkInput {
     binary: String,
     corked: bool,
     sink_id: String,
+    // PipeWire's object.serial: a capture stream can target the stream itself by it.
+    serial: String,
 }
 
 fn run_cmd(cmd: &[&str]) -> String {
@@ -341,6 +343,7 @@ fn parse_sink_inputs(text: &str, clients: &HashMap<String, PulseClient>) -> Vec<
                 binary,
                 corked,
                 sink_id: blk.get("Sink").cloned().unwrap_or_default(),
+                serial: blk.get("object.serial").cloned().unwrap_or_default(),
             });
         }
         sidx.clear();
@@ -632,6 +635,40 @@ fn score_stream(stream: &SinkInput, hints: &BTreeSet<String>, blocked_apps: &[St
     score
 }
 
+/// What cava captures for the best stream: its sink's monitor, unless a blocked app plays live on that
+/// same sink. Then the monitor would carry the blocked app too, so on PipeWire the stream itself is
+/// captured by its serial (CavaService runs cava with node.dont-reconnect, so it exits and re-resolves
+/// when that stream ends instead of falling to the microphone).
+fn pick_capture_source(
+    ranked: &[(i32, &SinkInput)],
+    streams: &[SinkInput],
+    sink_monitors: &HashMap<String, String>,
+    blocked_apps: &[String],
+    on_pipewire: bool,
+) -> Option<String> {
+    for (score, stream) in ranked {
+        if *score <= 0 || stream.node_name.is_empty() {
+            continue;
+        }
+        let shares_with_blocked = streams.iter().any(|other| {
+            other.index != stream.index
+                && other.sink_id == stream.sink_id
+                && !other.corked
+                && matches_blocked(other, blocked_apps)
+        });
+        if shares_with_blocked && on_pipewire {
+            let serial = if stream.serial.is_empty() { stream.index.to_string() } else { stream.serial.clone() };
+            return Some(serial);
+        }
+        if let Some(mon) = sink_monitors.get(&stream.sink_id) {
+            if !mon.is_empty() {
+                return Some(mon.clone());
+            }
+        }
+    }
+    None
+}
+
 pub fn run_resolve_audio_source_cli(args: &[String]) -> i32 {
     let mut desktop_entry = String::new();
     let mut blocked_json = "[]".to_string();
@@ -679,21 +716,16 @@ pub fn run_resolve_audio_source_cli(args: &[String]) -> i32 {
     let sink_monitors = parse_sink_monitors(&run_cmd(&["pactl", "list", "sinks"]));
     let hints = hint_binaries(&desktop_entry);
 
+    let on_pipewire = server_info.contains("PipeWire");
     let mut ranked: Vec<(i32, &SinkInput)> = streams
         .iter()
         .map(|s| (score_stream(s, &hints, &blocked_apps), s))
         .collect();
     ranked.sort_by(|a, b| (b.0, b.1.index).cmp(&(a.0, a.1.index)));
 
-    for (score, stream) in &ranked {
-        if *score > 0 && !stream.node_name.is_empty() {
-            if let Some(mon) = sink_monitors.get(&stream.sink_id) {
-                if !mon.is_empty() {
-                    println!("{mon}");
-                    return 0;
-                }
-            }
-        }
+    if let Some(source) = pick_capture_source(&ranked, &streams, &sink_monitors, &blocked_apps, on_pipewire) {
+        println!("{source}");
+        return 0;
     }
 
     if !blocked_apps.is_empty() && !hints.is_empty() {
@@ -703,15 +735,9 @@ pub fn run_resolve_audio_source_cli(args: &[String]) -> i32 {
             .map(|s| (score_stream(s, &empty_hints, &blocked_apps), s))
             .collect();
         fallback.sort_by(|a, b| (b.0, b.1.index).cmp(&(a.0, a.1.index)));
-        for (score, stream) in &fallback {
-            if *score > 0 && !stream.node_name.is_empty() {
-                if let Some(mon) = sink_monitors.get(&stream.sink_id) {
-                    if !mon.is_empty() {
-                        println!("{mon}");
-                        return 0;
-                    }
-                }
-            }
+        if let Some(source) = pick_capture_source(&fallback, &streams, &sink_monitors, &blocked_apps, on_pipewire) {
+            println!("{source}");
+            return 0;
         }
     }
 
@@ -1333,5 +1359,27 @@ mod tests {
         assert_eq!(strip_browser_markup("a<script>x<!--</script>-->b"), "a-->b");
         assert_eq!(strip_browser_markup("<scripts>keep</scripts>"), "keep");
         assert_eq!(strip_browser_markup("<STYLE>p{}</STYLE>ok"), "ok");
+    }
+
+    #[test]
+    fn test_capture_isolates_stream_beside_blocked_app() {
+        let listing = "Sink Input #40\n\tSink: 61\n\tCorked: no\n\tProperties:\n\t\tnode.name = \"spotify\"\n\t\tapplication.name = \"Spotify\"\n\t\tapplication.process.binary = \"spotify\"\n\t\tobject.serial = \"40\"\n\
+Sink Input #41\n\tSink: 61\n\tCorked: no\n\tProperties:\n\t\tnode.name = \"Firefox\"\n\t\tapplication.name = \"Firefox\"\n\t\tapplication.process.binary = \"firefox\"\n\t\tobject.serial = \"41\"\n";
+        let streams = parse_sink_inputs(listing, &HashMap::new());
+        assert_eq!(streams.len(), 2);
+        let monitors: HashMap<String, String> = [("61".to_string(), "out.monitor".to_string())].into();
+        let hints = hint_binaries("spotify");
+        let rank = |blocked: &[String]| {
+            let mut r: Vec<(i32, &SinkInput)> = streams.iter().map(|s| (score_stream(s, &hints, blocked), s)).collect();
+            r.sort_by(|a, b| (b.0, b.1.index).cmp(&(a.0, a.1.index)));
+            r
+        };
+        let blocked = vec!["firefox".to_string()];
+        // Firefox plays on Spotify's sink: the monitor would carry it, so Spotify's own stream is captured.
+        assert_eq!(pick_capture_source(&rank(&blocked), &streams, &monitors, &blocked, true).as_deref(), Some("40"));
+        // Pulse can't capture a stream: the monitor stays.
+        assert_eq!(pick_capture_source(&rank(&blocked), &streams, &monitors, &blocked, false).as_deref(), Some("out.monitor"));
+        // Nothing blocked: the sink's monitor, as before.
+        assert_eq!(pick_capture_source(&rank(&[]), &streams, &monitors, &[], true).as_deref(), Some("out.monitor"));
     }
 }
